@@ -1,374 +1,345 @@
-# Sleep Framework Continual Learning Lab 🧠💤
+# Continual Learning Lab: Memory Consolidation, Distillation, and Forgetting
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch 2.1+](https://img.shields.io/badge/PyTorch-2.1+-ee4c2c.svg)](https://pytorch.org/)
-[![Tests](https://img.shields.io/badge/tests-7%20passed-brightgreen.svg)]()
-[![Paper](https://img.shields.io/badge/arXiv-2606.03979-b31b1b.svg)](https://arxiv.org/html/2606.03979)
-[![Google Research](https://img.shields.io/badge/Google%20Research-Blog%20Post-4285F4.svg)](https://research.google/blog/the-sleep-framework-a-new-way-for-llms-to-retain-knowledge-in-continual-learning/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+**A reproducible PyTorch study of catastrophic forgetting, experience replay, low-rank model expansion, and synthetic rehearsal, inspired by Google's *Sleep* framework.**
 
-An educational, transparent PyTorch laboratory and deep-dive guide exploring the principles behind Google's **Sleep Framework** for continual learning in language models.
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![Research](https://img.shields.io/badge/Research-arXiv%3A2606.03979-B31B1B)](https://arxiv.org/abs/2606.03979)
+[![License](https://img.shields.io/badge/License-MIT-2EA44F)](LICENSE)
 
----
+A model can master a new task and still lose much of what it previously knew. This repository makes that failure observable in a small, controlled experiment and examines three ways to respond: **replay older examples**, **expand model capacity**, and **transfer behavior through distillation**.
+
+The project is intentionally modest in scale. It runs on synthetic two-task classification data with a compact neural network, provides per-seed benchmark artifacts, and exposes the exact assumptions behind each result. It is designed for readers who want to **inspect the code, reproduce the measurements, and understand the limitations** before exploring continual learning in larger models.
 
 > [!IMPORTANT]
-> **Independent Educational Implementation & Academic Disclaimer**
-> 
-> This repository is an independent educational laboratory designed to illuminate the underlying mathematical and architectural mechanics of continual learning, multi-timescale memory, and wake-sleep consolidation.
-> 
-> **This is NOT Google's official Sleep implementation, Hope architecture, or released model weights.** No proprietary code or weights were used. It is a synthetic PyTorch reproduction of the core mechanics designed to be fast, clear, reproducible on a single CPU core, and completely transparent about what works and why.
+> **Independent educational research project.** This is **not** Google's official Sleep framework, the Hope architecture, an LLM implementation, or a reproduction of the paper's reported benchmarks. It implements selected *conceptual analogues* using a synthetic classifier. No Google model weights or proprietary implementation are used.
 
----
+## Key findings
 
-## 📑 Table of Contents
+Across three random seeds, the experiment observed:
 
-- [The Core Problem: Catastrophic Forgetting](#the-core-problem-catastrophic-forgetting)
-- [How the Sleep Framework Works](#how-the-sleep-framework-works)
-  - [The Continuum Memory Hierarchy](#the-continuum-memory-hierarchy)
-  - [The 4-Phase Wake-Sleep Lifecycle](#the-4-phase-wake-sleep-lifecycle)
-- [Laboratory Architecture & Benchmark](#laboratory-architecture--benchmark)
-- [Experimental Results](#experimental-results)
-  - [Analysis of Findings](#analysis-of-findings)
-- [Repository Structure](#repository-structure)
-- [Quickstart Guide](#quickstart-guide)
-  - [Prerequisites](#prerequisites)
-  - [Installation](#installation)
-  - [Running Unit Tests](#running-unit-tests)
-  - [Running the Continual Learning Benchmark](#running-the-continual-learning-benchmark)
-- [Deep Dive: Code Walkthrough](#deep-dive-code-walkthrough)
-  - [1. Parameter Expansion (`FrozenExpandable`)](#1-parameter-expansion-frozenexpandable)
-  - [2. Upward Distillation (`soft_distill`)](#2-upward-distillation-soft_distill)
-  - [3. Synthetic Dreaming & Rehearsal (`select_dreams`)](#3-synthetic-dreaming--rehearsal-select_dreams)
-  - [4. Imitation Reward (`concepts.py`)](#4-imitation-reward-conceptspy)
-- [In-Depth Theoretical Companion (`ARTICLE.md`)](#in-depth-theoretical-companion-articlemd)
-- [Scientific Honesty: Lab vs. Full Paper](#scientific-honesty-lab-vs-full-paper)
-- [References & Citation](#references--citation)
+- **Forgetting:** Old-task accuracy declined from **99.79% to 52.95%** after naive fine-tuning on a new task.
+- **Replay:** Retaining **96 examples** from the original task improved old-task accuracy to **94.14%** after adaptation.
+- **Expansion and distillation:** A frozen base with a task-gated, rank-8 residual adapter maintained **99.79%** old-task accuracy while reaching **99.10%** on the new task.
+- **Synthetic rehearsal:** An additional rehearsal stage **did not improve** the new-task score in this experiment; it decreased from **99.10% to 98.79%**.
 
----
+**Critical qualification:** The expanded model is given the correct task identity as an input feature. Its adapter is explicitly disabled for the old task, so old-task predictions remain unchanged **by construction**, not because the system has learned reliable task identification or continual memory consolidation.
 
-## The Core Problem: Catastrophic Forgetting
+## Contents
 
-When you prompt a modern Large Language Model (LLM) with a 50-page technical manual, it can answer queries about the document accurately while it sits inside the active attention context window. But as soon as that session terminates, the context is cleared—the model retains **zero** persistent memory of the document.
+- [Research context](#research-context)
+- [Experimental design](#experimental-design)
+- [Results](#results)
+- [Getting started](#getting-started)
+- [How the implementation works](#how-the-implementation-works)
+- [Reproducibility and validation](#reproducibility-and-validation)
+- [Project structure](#project-structure)
+- [Limitations](#limitations)
+- [Possible extensions](#possible-extensions)
+- [Further reading and citation](#further-reading-and-citation)
+- [License](#license)
 
-The intuitive remedy is to fine-tune the model on the new document. However, doing so triggers **catastrophic forgetting**:
+## Research context
 
-```
-Task A (Historical Knowledge) ──────────► [Train Model] ──────────► Task A: 99.8% Accuracy
-                                                │
-                                    Adapt to Task B (New Data)
-                                                │
-                                                ▼
-                                         [Updated Model]
-                                         Task B: 99.4% Accuracy  (Learned new task!)
-                                         Task A: 52.9% Accuracy  (Catastrophic collapse to random guess!)
-```
+In sequential learning, training a neural network on a new distribution can interfere with parameters that supported earlier tasks. This is the **stability–plasticity problem**: a model needs enough flexibility to learn something new and enough stability to retain what it learned before.
 
-Because deep neural networks rely on distributed overlapping weight representations, backpropagating gradients for Task B overhauls parameter pathways that were critical for Task A.
+The research paper [*Language Models Need Sleep: Learning to Self-Modify and Consolidate Memories*](https://arxiv.org/abs/2606.03979), by Behrouz and collaborators, explores a wake/sleep learning paradigm with more sophisticated mechanisms than those demonstrated here. Its proposed *sleep* phase includes **Knowledge Seeding**, which transfers information into expanded model capacity, and **Dreaming**, which generates and evaluates synthetic learning experiences.
 
----
+This repository asks a narrower question:
 
-## How the Sleep Framework Works
+**What can we learn about forgetting, replay, capacity isolation, and teacher–student transfer using a small experiment where every training step is inspectable?**
 
-The paper *"Language Models Need Sleep: Learning to Self-Modify and Consolidate Memories"* (Behrouz et al., 2026) proposes separating online interaction from persistent memory consolidation:
+The code studies analogous ideas. It does **not** implement the paper's multi-timescale Hope memory system, learned Mixture-of-Experts routing, on-policy sequence distillation, or reinforcement-learning-based Dreaming.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                                 WAKE PHASE                                      │
-│  • Online user interactions & document intake                                   │
-│  • Fast, ephemeral adaptation via short-term local parameters (Teacher)        │
-│  • Core base model remains stable and protected                                 │
-└────────────────────────────────────────┬────────────────────────────────────────┘
-                                         │
-                                         ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                                 SLEEP PHASE                                     │
-│  1. Expand Capacity: Allocate fresh low-rank parameter capacity (Residual/LoRA) │
-│  2. Upward Distillation: Transfer wake insights from Teacher into Student       │
-│  3. Synthetic Dreaming: Generate synthetic prompts to practice edge cases       │
-│  4. Rehearsal: Consolidate durable memories without overwriting historical data │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
+## Experimental design
 
-### The Continuum Memory Hierarchy
+### Tasks and network
 
-The Sleep paradigm distinguishes three distinct tiers of memory:
-1. **Contextual Memory**: Ephemeral activations in the KV-cache during inference (bounded by context window size).
-2. **External Memory**: Search indices, vector databases, and retrieval stores (accurate, inspectable, but requires retrieval routing).
-3. **Parametric Memory**: Model weights and low-rank residuals. Parametric memory enables generalized, retrieval-free reasoning, but requires careful consolidation to avoid destructive interference.
-
-### The 4-Phase Wake-Sleep Lifecycle
-
-```
-           [Frozen Base Model (Task A)]
-                       │
-             ┌─────────┴─────────┐
-             │                   │
-             ▼                   ▼
-    (Wake Adaptation)   (Capacity Expansion)
-   [Temporary Teacher]   [Frozen Base + Rank-8 Adapter]
-             │                   │
-             └─────────┬─────────┘
-                       │
-             [Upward Distillation]
-             (Soft KL divergence loss)
-                       │
-                       ▼
-             [Synthetic Dreaming]
-     (Filter high disagreement + high confidence)
-                       │
-                       ▼
-             [Dream Rehearsal]
-             (Final Consolidated Model)
-```
-
-1. **Wake Adaptation**: When new data (Task B) arrives, an unconstrained temporary teacher model rapidly adapts to the new domain.
-2. **Capacity Expansion**: Rather than modifying the base model's existing weights, the architecture freezes the historical weights and dynamically allocates new low-rank adapter capacity.
-3. **Upward Knowledge Distillation**: The student model learns from the temporary teacher's soft output probability distributions across synthetic unlabeled inputs using temperature-scaled Kullback–Leibler (KL) divergence.
-4. **Synthetic Dreaming**: The student and teacher evaluate candidate synthetic problems. Samples exhibiting high model disagreement paired with confident teacher labels are selected as "dreams" and rehearsed.
-
----
-
-## Laboratory Architecture & Benchmark
-
-To make these mechanics crystal clear, this repository implements a clean, deterministic PyTorch continual learning laboratory:
-
-- **Input Space**: 2D Gaussian coordinates + 1 task indicator feature: $\mathbf{x} = [x_1, x_2, \text{task\_id}] \in \mathbb{R}^3$.
-- **Task A**: Predict whether the first coordinate is positive ($x_1 > 0$).
-- **Task B**: Predict whether the second coordinate is positive ($x_2 > 0$).
-- **Model Architecture**:
-  - `SmallNet`: 3-input $\to$ 24-neuron hidden layer ($\tanh$) $\to$ 2-class linear output head.
-  - `FrozenExpandable`: Frozen base copy of `SmallNet` with an added low-rank bottleneck residual adapter:
-    $$\mathbf{h} = \tanh(\mathbf{W}_{\text{base}} \mathbf{x} + \mathbf{b}_{\text{base}})$$
-    $$\hat{\mathbf{y}} = \mathbf{W}_{\text{head}} \mathbf{h} + \mathbb{I}_{\text{task}=B} \cdot \left( \mathbf{W}_{\text{up}} \mathbf{W}_{\text{down}} \mathbf{h} \right)$$
-    where $\mathbf{W}_{\text{down}} \in \mathbb{R}^{8 \times 24}$ and $\mathbf{W}_{\text{up}} \in \mathbb{R}^{2 \times 8}$.
-
----
-
-## Experimental Results
-
-The benchmark evaluates five training stages across **3 independent random seeds** on held-out test sets ($N=1,400$ per task). Results are saved in [`results/benchmark.json`](results/benchmark.json):
-
-| Stage | Task A (Old) Accuracy | Task B (New) Accuracy | Note |
-| :--- | :---: | :---: | :--- |
-| **1. Baseline (Old Checkpoint)** | **99.79%** $\pm$ 0.08% | 51.40% $\pm$ 1.09% | Trained solely on Task A; chance level on Task B. |
-| **2. Naive Sequential Fine-Tuning** | 52.95% $\pm$ 1.42% | **99.38%** $\pm$ 0.39% | **Catastrophic Forgetting**: Task A collapses to near random chance (~50%). |
-| **3. Experience Replay (96 buffer)** | 94.14% $\pm$ 3.77% | 99.12% $\pm$ 0.16% | Partial retention of Task A, but notable degradation and high variance. |
-| **4. Expanded + Distillation (Sleep)** | **99.79%** $\pm$ 0.08% | **99.10%** $\pm$ 0.42% | **Perfect Task A retention**; Task B successfully mastered via teacher KL distillation. |
-| **5. Expanded + Dream Rehearsal** | **99.79%** $\pm$ 0.08% | 98.79% $\pm$ 0.57% | Rehearsing filtered synthetic dreams maintains stability. |
-
-### Analysis of Findings
-
-1. **Catastrophic Forgetting is Real**: In naive sequential fine-tuning, Task A accuracy instantly drops by **46.84 percentage points** (from 99.79% to 52.95%).
-2. **Rehearsal Buffers Are Imperfect**: Preserving 96 past exemplars mitigates forgetting (recovering to 94.14%), but incurs memory storage overhead and still suffers a 5.65% drop.
-3. **Architectural Gating vs. Learned MoE Routing**: In `FrozenExpandable`, Task A logits are 100% mathematically invariant by design because historical weights are frozen and the adapter is modulated by task identity. In real LLMs, routing must be learned dynamically, which introduces routing errors.
-4. **Distillation Efficiency**: Knowledge distillation transfers new task capabilities cleanly into the low-rank adapter without requiring access to original Task B ground-truth labels during the consolidation phase.
-
----
-
-## Repository Structure
+Each input contains two Gaussian coordinates and an explicit binary task indicator:
 
 ```text
-sleep_framework_lab/
-├── README.md               # You are here: comprehensive project documentation
-├── ARTICLE.md              # 800+ line Medium-style deep dive & research critique
-├── BENCHMARK_NOTES.md      # Detailed benchmark interpretation & methodology notes
-├── requirements.txt        # Minimal dependencies (PyTorch)
-├── sleep_lab.py            # Complete runnable benchmark & architecture implementation
-├── concepts.py             # Conceptual helpers: Levenshtein distance & imitation reward
-├── results/
-│   └── benchmark.json      # Raw JSON output across multiple experimental seeds
-└── tests/
-    └── test_lab.py         # Unit tests covering distillation, routing, and selection
+input = [x1, x2, task_id]
+
+Task A (task_id = 0): classify whether x1 > 0
+Task B (task_id = 1): classify whether x2 > 0
 ```
 
----
+The baseline `SmallNet` is a small multilayer perceptron with three input features, one 24-unit `tanh` hidden layer, and a two-class output head.
 
-## Quickstart Guide
+The experiment first trains on Task A, then compares different approaches to Task B adaptation using independent held-out test sets.
 
-### Prerequisites
+### Compared approaches
 
-- Python 3.10, 3.11, or 3.12
-- PyTorch 2.1+ (CPU or CUDA/MPS; runs lightning fast on standard CPU)
+**1. Naive sequential fine-tuning.** Continue updating the original model on Task B without rehearsal or constraints. This provides the forgetting baseline.
+
+**2. Experience replay.** Mix new-task training batches with samples from a buffer of 96 Task A examples. This introduces historical supervision during adaptation.
+
+**3. Low-rank expansion with distillation.** Freeze a copy of the Task A model. Add a rank-8 residual pathway for Task B and train it to approximate a Task B teacher's soft predictions using temperature-scaled KL divergence.
+
+**4. Synthetic rehearsal.** Generate additional synthetic Task B inputs, prioritize confident teacher predictions where teacher and student disagree, and fine-tune the adapter on selected pseudo-labels.
+
+The training flow is:
+
+```text
+                     Train on Task A
+                            |
+                   Task A checkpoint
+                            |
+             +--------------+---------------+
+             |              |               |
+             v              v               v
+       Fine-tune on B   Replay A + B    Freeze base model
+             |              |               |
+             |              |        Train temporary B teacher
+             |              |               |
+             |              |        Add rank-8 B-only adapter
+             |              |               |
+             |              |        Distill teacher predictions
+             |              |               |
+             |              |        Optional synthetic rehearsal
+             |              |               |
+             +--------------+---------------+
+                            |
+              Evaluate on held-out A and B
+```
+
+### Why task identity matters
+
+`FrozenExpandable` routes with the provided `task_id`. For Task A, the adapter's contribution is multiplied by zero. Therefore, its Task A outputs are exactly those of the frozen base, even after the adapter has been trained.
+
+That is a useful example of **structural isolation**, but it removes the task-identification challenge that a realistic continually learning agent or learned expert router must solve. The strong retention result must be interpreted with this constraint in mind.
+
+## Results
+
+The following values are from the included [benchmark artifact](results/benchmark.json), averaged across **three independent random seeds (0, 1, and 2)**. Each value is a held-out accuracy percentage, reported as **mean ± sample standard deviation**.
+
+| Training condition | Task A: old task | Task B: new task |
+|---|---:|---:|
+| Task A checkpoint, before adaptation | **99.79 ± 0.08%** | 51.40 ± 1.09% |
+| Naive sequential fine-tuning | 52.95 ± 1.42% | **99.38 ± 0.39%** |
+| Experience replay, 96 stored examples | 94.14 ± 3.77% | 99.12 ± 0.16% |
+| Frozen base + rank-8 adapter + distillation | **99.79 ± 0.08%** | 99.10 ± 0.42% |
+| Above, followed by synthetic rehearsal | **99.79 ± 0.08%** | 98.79 ± 0.57% |
+
+### Interpreting the findings
+
+**Sequential fine-tuning causes substantial interference in this setup.** The new-task model performs well on Task B while old-task accuracy falls by **46.84 percentage points**. This demonstrates catastrophic forgetting in the particular small classification experiment; it is not a measurement of forgetting in a language model.
+
+**Replay provides a strong baseline.** A small buffer recovers much of the original-task performance, although its results vary across seeds. The buffer has a storage and data-retention cost that more advanced methods may try to reduce.
+
+**The expanded adapter avoids old-task interference by design.** Its strong Task A accuracy is an expected consequence of freezing and gating, not evidence that it independently learned an effective MoE router. Distillation transfers useful Task B behavior to the adapter without using Task B ground-truth labels during that transfer stage.
+
+**The dream-inspired stage is a negative result.** The additional pseudo-labeled rehearsal slightly **reduced** Task B accuracy in these runs. More synthetic data does not automatically mean better learning. This project's selection heuristic is substantially simpler than the paper's Dreaming approach, so the result neither verifies nor refutes the paper's findings.
+
+Three seeds are useful for checking basic variability, but are insufficient for strong statistical or generalization claims. See [BENCHMARK_NOTES.md](BENCHMARK_NOTES.md) and the raw [results/benchmark.json](results/benchmark.json) for run-level detail.
+
+## Getting started
+
+### Requirements
+
+- Python **3.10 or newer**
+- PyTorch **2.1 or newer** (see [`requirements.txt`](requirements.txt))
+- A CPU is sufficient for the included experiment; a GPU is not required
 
 ### Installation
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/AdityaInamdar334/sleep-framework-lab.git
-   cd sleep-framework-lab
-   ```
-
-2. **Create and activate a virtual environment:**
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate       # macOS / Linux
-   # .venv\Scripts\activate       # Windows
-   ```
-
-3. **Install dependencies:**
-   ```bash
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
-
-### Running Unit Tests
-
-The test suite validates dataset synthesis, logit invariance, distillation loss calculations, dream filtering, and end-to-end execution:
+Clone the repository:
 
 ```bash
-python3 -m unittest discover -s tests -v
+git clone https://github.com/AdityaInamdar334/sleep-framework-lab.git
+cd sleep-framework-lab
 ```
 
-Expected output:
-```text
-test_edit_distance (test_lab.ConceptTests.test_edit_distance) ... ok
-test_imitation_reward (test_lab.ConceptTests.test_imitation_reward) ... ok
-test_dream_selection (test_lab.LabTests.test_dream_selection) ... ok
-test_full_quick_benchmark (test_lab.LabTests.test_full_quick_benchmark) ... ok
-test_old_exact (test_lab.LabTests.test_old_exact) ... ok
-test_soft_distill (test_lab.LabTests.test_soft_distill) ... ok
-test_task_labels (test_lab.LabTests.test_task_labels) ... ok
+Create an isolated Python environment:
 
-----------------------------------------------------------------------
-Ran 7 tests in ~0.6s
-
-OK
-```
-
-### Running the Continual Learning Benchmark
-
-#### 1. Ultra-Fast Smoke Test (< 1 second)
 ```bash
-python3 sleep_lab.py --seeds 1 --quick --output results/smoke.json
+python -m venv .venv
 ```
 
-#### 2. Full 3-Seed Statistical Benchmark (~2 seconds)
+Activate it on macOS or Linux:
+
 ```bash
-python3 sleep_lab.py --seeds 3 --output results/benchmark.json
+source .venv/bin/activate
 ```
 
-The script will output the summary table in JSON format and write detailed run logs directly to `results/benchmark.json`.
+On Windows PowerShell:
 
----
+```powershell
+.venv\Scripts\Activate.ps1
+```
 
-## Deep Dive: Code Walkthrough
+Install the dependencies:
 
-### 1. Parameter Expansion (`FrozenExpandable`)
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
-In [`sleep_lab.py`](sleep_lab.py), the `FrozenExpandable` class wraps the base model, freezes all original weights, and attaches low-rank matrices $\mathbf{W}_{\text{down}}$ and $\mathbf{W}_{\text{up}}$:
+### Run the tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The included test suite covers task-label construction, exact old-task logit preservation, distillation-loss behavior, synthetic-example selection, edit-distance helpers, and an end-to-end quick run. **Seven tests passed** in the checked project state.
+
+### Run a quick experiment
+
+```bash
+python sleep_lab.py --seeds 1 --quick --output results/smoke.json
+```
+
+### Reproduce the reported benchmark
+
+```bash
+python sleep_lab.py --seeds 3 --output results/benchmark.json
+```
+
+The script prints the summary and writes a JSON file containing per-seed results, mean accuracies, and sample standard deviations. Runtime will depend on the machine and PyTorch installation; the experiment was designed to be lightweight on a CPU.
+
+> **Tip:** The benchmark command writes to `results/benchmark.json`. Use another `--output` path if you want to preserve the committed reference results unchanged.
+
+## How the implementation works
+
+### `SmallNet`: a deliberately minimal baseline
+
+The baseline is small enough to train repeatedly, allowing the experiment to isolate changes in training strategy rather than differences in model scale or pretraining data.
+
+### `FrozenExpandable`: isolate new-task capacity
+
+The expanded model keeps the original network frozen and learns a new residual transformation using two linear layers:
 
 ```python
 class FrozenExpandable(nn.Module):
     def __init__(self, base: SmallNet, rank: int = 8):
         super().__init__()
         self.base = copy.deepcopy(base)
-        for p in self.base.parameters():
-            p.requires_grad_(False)  # Lock historical parameters
-        
+
+        for parameter in self.base.parameters():
+            parameter.requires_grad_(False)
+
         width = self.base.head.in_features
         self.down = nn.Linear(width, rank, bias=False)
         self.up = nn.Linear(rank, 2, bias=False)
+
         nn.init.normal_(self.down.weight, std=0.03)
-        nn.init.zeros_(self.up.weight)  # Zero initialization guarantees identity mapping at step 0
+        nn.init.zeros_(self.up.weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
-            h = self.base.features(x)
-            old_logits = self.base.head(h)
-        residual = self.up(self.down(h))
-        is_new = x[:, 2:3]  # Modulate via task indicator
-        return old_logits + is_new * residual
+            features = self.base.features(x)
+            original_logits = self.base.head(features)
+
+        residual = self.up(self.down(features))
+        task_b_gate = x[:, 2:3]
+        return original_logits + task_b_gate * residual
 ```
 
-### 2. Upward Distillation (`soft_distill`)
+For Task A, `task_b_gate` is zero, so the residual cannot alter the original logits. The `up` projection also starts at zero, meaning the expanded network initially matches the frozen base for both tasks.
 
-Rather than training on hard binary labels $\{0, 1\}$, the student learns from the soft logit distributions produced by the teacher using temperature-scaled Kullback–Leibler divergence:
+This is a **task-gated low-rank residual**, not a learned mixture-of-experts system and not a full implementation of the paper's Knowledge Seeding algorithm.
+
+### `soft_distill`: transfer teacher predictions
+
+The student minimizes KL divergence between its output distribution and the temporary Task B teacher's distribution:
 
 ```python
-def soft_distill(student_logits: torch.Tensor, teacher_logits: torch.Tensor,
-                 temperature: float = 2.0) -> torch.Tensor:
+def soft_distill(student_logits, teacher_logits, temperature=2.0):
     return F.kl_div(
         F.log_softmax(student_logits / temperature, dim=-1),
         F.softmax(teacher_logits / temperature, dim=-1),
-        reduction='batchmean',
+        reduction="batchmean",
     ) * (temperature ** 2)
 ```
 
-### 3. Synthetic Dreaming & Rehearsal (`select_dreams`)
+Temperature scaling softens the distributions during training. The experiment uses generated Task B inputs for this transfer, with the teacher supplying probability targets. This is conventional classifier distillation, **not** on-policy autoregressive sequence distillation.
 
-During "sleep", the model generates candidate problems. Instead of rehearsing everything, it filters for candidates where:
-1. The teacher is confident ($\ge 65\%$).
-2. The student and teacher disagree most strongly ($|\mathbf{p}_{\text{student}} - \mathbf{p}_{\text{teacher}}|$):
+### `select_dreams`: select informative synthetic examples
 
-```python
-def select_dreams(student: FrozenExpandable, teacher: SmallNet,
-                  candidates: torch.Tensor, top_n: int = 160,
-                  random_n: int = 40, seed: int = 15) -> tuple[torch.Tensor, torch.Tensor]:
-    student.eval()
-    teacher.eval()
-    with torch.no_grad():
-        tprob = teacher(candidates).softmax(-1)
-        sprob = student(candidates).softmax(-1)
-        confidence, pseudo_y = tprob.max(-1)
-        scores = (sprob - tprob).abs().sum(-1)
-        
-        # Discard low-confidence teacher hallucinations
-        scores = torch.where(confidence >= 0.65, scores, -torch.ones_like(scores))
-        order = scores.argsort(descending=True)
-        high = order[scores[order] >= 0][:top_n]
-        ...
-    return candidates[indices], pseudo_y[indices]
+The rehearsal stage samples synthetic Task B inputs and scores them using the **difference between teacher and student output probabilities**. It prioritizes high-disagreement candidates for which the teacher's maximum class probability is at least `0.65`, alongside a smaller random selection of other eligible candidates.
+
+These scores are a heuristic. They are **not** the parameter-gradient, expert-perturbation, or reinforcement-learning reward mechanism described in the full Sleep paper.
+
+The chosen examples receive teacher pseudo-labels and are used to fine-tune the task-specific adapter. As the benchmark shows, this additional step can reduce measured accuracy.
+
+### `concepts.py`: a separate imitation-reward illustration
+
+[`concepts.py`](concepts.py) implements edit-distance and an illustrative reward that mixes a binary semantic-match signal with normalized sequence similarity. The helpers show one way sequence-level imitation can be scored.
+
+They are **not wired into the classifier's training loop** and should not be confused with the paper's complete Learning to Imitate objective.
+
+## Reproducibility and validation
+
+The included reference benchmark was captured with **PyTorch 2.10.0+cpu** using seeds `0`, `1`, and `2`.
+
+- **Training data:** 1,400 examples per task, generated with seeded Gaussian random-number generators.
+- **Evaluation data:** Separate, held-out sets of 1,400 examples per task.
+- **Initial training:** 180 Adam steps on Task A.
+- **Task B adaptation:** 220 Adam steps for the main sequential-training baselines.
+- **Replay memory:** The first 96 Task A training examples.
+- **Expanded model:** A frozen Task A base and a rank-8 Task B residual, with explicit task-ID gating.
+- **Distillation:** Synthetic unlabeled Task B inputs and teacher-produced distributions.
+- **Synthetic rehearsal:** Selected teacher-pseudo-labeled Task B inputs, using disagreement and confidence heuristics.
+- **Reporting:** Mean and sample standard deviation over the three seeds, with full per-run values in JSON.
+
+No held-out evaluation labels are used to train or select synthetic examples. Exact numbers can still vary with PyTorch version, platform, and execution details. The reference results describe this **specific controlled experiment**, not a standardized continual-learning benchmark suite.
+
+## Project structure
+
+```text
+sleep-framework-lab/
+├── ARTICLE.md             # Research-oriented explanatory companion
+├── BENCHMARK_NOTES.md     # Experimental configuration and caveats
+├── README.md              # Project overview and reproducibility guide
+├── LICENSE                # MIT license
+├── requirements.txt       # PyTorch dependency
+├── sleep_lab.py           # Models, training methods, benchmark runner
+├── concepts.py            # Edit distance and imitation reward examples
+├── results/
+│   └── benchmark.json     # Reference runs, means, and standard deviations
+└── tests/
+    └── test_lab.py        # Unit tests and quick integration test
 ```
 
-### 4. Imitation Reward (`concepts.py`)
+For a longer discussion of the paper's research context and the differences between the paper and this experiment, see [ARTICLE.md](ARTICLE.md).
 
-In [`concepts.py`](concepts.py), we illustrate how the Sleep paper defines **Learning to Imitate (LTI)**: rewarding sequence generation through a mixture of semantic correctness and bounded edit similarity:
+## Limitations
 
-```python
-def imitation_reward(candidate: str, reference: str,
-                     semantic_match: bool, gamma: float = 0.5,
-                     max_normalized_distance: float = 0.5) -> float:
-    """Illustrative mixture: human semantic bit + capped Levenshtein similarity."""
-    length = max(len(candidate), len(reference), 1)
-    normalized = edit_distance(candidate, reference) / length
-    absolute = (1 - normalized) if normalized <= max_normalized_distance else 0.0
-    return gamma * float(semantic_match) + (1 - gamma) * absolute
-```
+The repository intentionally leaves out several components necessary for a faithful reproduction of the research paper:
 
----
+- **No language model or token generation.** The benchmark uses a two-class feedforward classifier, not an autoregressive LLM.
+- **No Hope or multi-timescale memory architecture.** The example does not implement independently updated nested memory modules.
+- **No learned task routing.** Task identity is directly encoded in the input, and the old-task preservation guarantee depends on that gate.
+- **No full Knowledge Seeding.** The model demonstrates low-rank expansion and teacher–student distillation, but not the paper's pre-update memory transfer or generalized sequence-level distillation.
+- **No paper-faithful Dreaming.** The experiment uses confidence-filtered pseudo-labeling and probability disagreement, not learned routing perturbations, parameter-gradient sample scoring, or RL-guided curriculum selection.
+- **No claims about long-context reasoning or knowledge incorporation in LLMs.** The benchmark cannot measure those capabilities.
 
-## In-Depth Theoretical Companion (`ARTICLE.md`)
+These limitations are central to interpreting the results. The project is best understood as a **teaching and prototyping environment for continual-learning mechanics**, not an implementation or validation of Google's research system.
 
-This repository includes a full-length, publication-ready research article: [`ARTICLE.md`](ARTICLE.md). It breaks down:
+## Possible extensions
 
-- **Section 1–4**: Mathematical foundations of catastrophic forgetting, memory hierarchies, and the Wake-Sleep duality.
-- **Section 5–9**: Detailed mechanics of low-rank expansion, upward distillation vs. standard distillation, and reinforcement learning for synthetic data.
-- **Section 10–11**: **Critical evaluation**: What the published empirical results prove, where confounding variables exist, and why routing in Mixture-of-Experts remains the hardest open problem.
-- **Section 12–21**: Complete step-by-step code construction and blueprint for scaling toward LLM production deployments.
+For readers interested in making the experiment more realistic, useful next steps include:
 
----
+1. **Remove the task-ID feature.** Evaluate how well a learned router can select adapters when task identity is unknown.
+2. **Measure transfer and interference separately.** Add tasks with overlapping or conflicting decision boundaries instead of only independent coordinate-sign labels.
+3. **Study memory efficiency.** Compare rehearsal-buffer size, number of trainable adapter parameters, and compute cost at matched accuracy targets.
+4. **Improve synthetic selection.** Add selection ablations and compare disagreement-based sampling with random sampling, uncertainty sampling, and gradient-based criteria.
+5. **Move to a language-model benchmark.** Introduce a small open-weight autoregressive model and evaluate sequential domain adaptation with fixed compute and independent retention tests.
 
-## Scientific Honesty: Lab vs. Full Paper
+Any larger-scale extension should clearly separate new experimental results from those reported in the original paper.
 
-To maintain rigorous scientific standards, here is an explicit side-by-side comparison between this educational laboratory and the research paper:
+## Further reading and citation
 
-| Feature | Paper (*Behrouz et al., 2026*) | This Educational Lab |
-| :--- | :--- | :--- |
-| **Model Family** | 10M-token LLMs (Hope / Transformer) | 2-Layer Feedforward MLP |
-| **Task Domain** | Natural language sequence modeling & reasoning | 2D Synthetic coordinate classification |
-| **Task Routing** | Learned dynamic Mixture-of-Experts (MoE) router | Explicit input flag ($x_3$) + hard architectural gating |
-| **Old Task Preservation** | Learned routing (subject to routing errors) | Guaranteed $100\%$ by freezing + structural gating |
-| **Dream Selection** | Full parameter-gradient Fisher information & RL rewards | Softmax probability disagreement proxy |
-| **Execution Cost** | Multi-GPU cluster training hours | < 2 seconds on a single CPU core |
+**Research paper**
 
----
+Ali Behrouz, Farnoosh Hashemi, Adel Javanmard, and Vahab Mirrokni. *Language Models Need Sleep: Learning to Self-Modify and Consolidate Memories.* arXiv:2606.03979 (2026).
 
-## References & Citation
+- [Read the paper](https://arxiv.org/abs/2606.03979)
+- [Google Research's overview](https://research.google/blog/the-sleep-framework-a-new-way-for-llms-to-retain-knowledge-in-continual-learning/)
+- [Project's extended research notes](ARTICLE.md)
 
-1. **Behrouz, A., Hashemi, F., Javanmard, A., & Mirrokni, V.** (2026). *Language Models Need Sleep: Learning to Self-Modify and Consolidate Memories*. arXiv preprint [arXiv:2606.03979](https://arxiv.org/html/2606.03979).
-2. **Google Research Blog** (October 27, 2026). *The Sleep framework: A new way for LLMs to retain knowledge in continual learning*. [research.google/blog](https://research.google/blog/the-sleep-framework-a-new-way-for-llms-to-retain-knowledge-in-continual-learning/).
+If you refer to the **Sleep framework**, please cite the original paper. If you refer to the **toy experiment or its measurements**, link to this repository and specify that it is an independent educational implementation.
 
-### BibTeX
 ```bibtex
 @article{behrouz2026sleep,
   title={Language Models Need Sleep: Learning to Self-Modify and Consolidate Memories},
@@ -378,8 +349,6 @@ To maintain rigorous scientific standards, here is an explicit side-by-side comp
 }
 ```
 
----
-
 ## License
 
-This project is released under the [MIT License](LICENSE). Educational and research use is encouraged!
+Released under the [MIT License](LICENSE). This project is independent of Google Research and is not affiliated with or endorsed by the authors of the Sleep paper.
