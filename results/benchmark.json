@@ -1,0 +1,136 @@
+{
+  "description": "Synthetic two-task binary classification toy; not LLM or official Sleep reproduction",
+  "task_identity_provided": true,
+  "old_task_preservation": "guaranteed by explicit gating + frozen base",
+  "seeds": 3,
+  "quick": false,
+  "summary": {
+    "old_checkpoint": {
+      "old": {
+        "mean": 99.79,
+        "std": 0.08
+      },
+      "new": {
+        "mean": 51.4,
+        "std": 1.09
+      }
+    },
+    "naive_finetune": {
+      "old": {
+        "mean": 52.95,
+        "std": 1.42
+      },
+      "new": {
+        "mean": 99.38,
+        "std": 0.39
+      }
+    },
+    "replay_96": {
+      "old": {
+        "mean": 94.14,
+        "std": 3.77
+      },
+      "new": {
+        "mean": 99.12,
+        "std": 0.16
+      }
+    },
+    "expanded_after_distillation": {
+      "old": {
+        "mean": 99.79,
+        "std": 0.08
+      },
+      "new": {
+        "mean": 99.1,
+        "std": 0.42
+      }
+    },
+    "expanded_after_dream_rehearsal": {
+      "old": {
+        "mean": 99.79,
+        "std": 0.08
+      },
+      "new": {
+        "mean": 98.79,
+        "std": 0.57
+      }
+    }
+  },
+  "runs": [
+    {
+      "seed": 0,
+      "old_checkpoint": {
+        "old": 99.71,
+        "new": 50.14
+      },
+      "naive_finetune": {
+        "old": 51.36,
+        "new": 99.57
+      },
+      "replay_96": {
+        "old": 95.29,
+        "new": 98.93
+      },
+      "expanded_after_distillation": {
+        "old": 99.71,
+        "new": 98.93
+      },
+      "expanded_after_dream_rehearsal": {
+        "old": 99.71,
+        "new": 98.36
+      },
+      "selected_dreams": 200,
+      "elapsed_sec": 1.16
+    },
+    {
+      "seed": 1,
+      "old_checkpoint": {
+        "old": 99.79,
+        "new": 52.0
+      },
+      "naive_finetune": {
+        "old": 53.43,
+        "new": 99.64
+      },
+      "replay_96": {
+        "old": 97.21,
+        "new": 99.21
+      },
+      "expanded_after_distillation": {
+        "old": 99.79,
+        "new": 99.57
+      },
+      "expanded_after_dream_rehearsal": {
+        "old": 99.79,
+        "new": 99.43
+      },
+      "selected_dreams": 200,
+      "elapsed_sec": 0.49
+    },
+    {
+      "seed": 2,
+      "old_checkpoint": {
+        "old": 99.86,
+        "new": 52.07
+      },
+      "naive_finetune": {
+        "old": 54.07,
+        "new": 98.93
+      },
+      "replay_96": {
+        "old": 89.93,
+        "new": 99.21
+      },
+      "expanded_after_distillation": {
+        "old": 99.86,
+        "new": 98.79
+      },
+      "expanded_after_dream_rehearsal": {
+        "old": 99.86,
+        "new": 98.57
+      },
+      "selected_dreams": 200,
+      "elapsed_sec": 0.48
+    }
+  ]
+}

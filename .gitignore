@@ -1,0 +1,27 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor directories
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output logs and temporary files
+*.log
